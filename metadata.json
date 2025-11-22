@@ -1,0 +1,5 @@
+{
+  "name": "PDF Learner",
+  "description": "Transforms any PDF into an interactive learning experience with AI-generated visuals, audio narration, and quizzes to test your knowledge as you progress through the material.",
+  "requestFramePermissions": []
+}
