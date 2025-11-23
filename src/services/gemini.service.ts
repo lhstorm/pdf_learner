@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { GoogleGenAI, Type } from '@google/genai';
-import { Slide } from '../types';
+import { Course } from '../types';
 
 @Injectable({
   providedIn: 'root',
@@ -10,7 +10,6 @@ export class GeminiService {
 
   private get ai(): GoogleGenAI {
     if (!this._ai) {
-      // IMPORTANT: This assumes process.env.API_KEY is available in the execution environment.
       if (!process.env.API_KEY) {
         throw new Error(
           'API_KEY environment variable not set. Please ensure it is configured.'
@@ -21,17 +20,37 @@ export class GeminiService {
     return this._ai;
   }
 
-  async generateLearningExperience(pdfText: string): Promise<Slide[]> {
+  async generateLearningExperience(pdfText: string, imageCount: number): Promise<Course> {
     const model = 'gemini-2.5-flash';
-    const truncatedText = pdfText.substring(0, 100000); // Truncate to a reasonable length
+    const truncatedText = pdfText.substring(0, 150000);
 
-    const prompt = `You are an expert instructional designer. Your task is to transform the following document text into a concise, engaging, and interactive learning experience.
-    Break the content down into a series of focused slides. For each slide, you must provide:
-    1. A clear 'title'.
-    2. A 'content' paragraph summarizing the key information (max 150 words).
-    3. An 'imagePrompt' which is a simple, descriptive phrase for an AI image generator to create a relevant visual.
-    4. An 'audioText' which is a script to be read aloud, explaining the slide's core concept clearly.
-    5. A 'quiz' object with a multiple-choice question to test understanding, but only if a testable concept is present. If not, the quiz should be null. The quiz must have a 'question', an array of 'options', and the exact 'correctAnswer' string.
+    const prompt = `You are an expert instructional designer. Your task is to transform the following document text into a complete, engaging, and interactive learning course.
+
+    You have been provided with ${imageCount} images extracted directly from the document. When creating slides, you MUST decide whether to reuse one of these images or generate a new one.
+
+    The course structure must be as follows:
+    1. An 'intro' object:
+        - 'title': A compelling title for the course.
+        - 'overview': A paragraph summarizing what the course is about.
+        - 'learningOutcomes': An array of strings describing what the learner will know or be able to do.
+        - 'courseStructure': An array of strings outlining the main sections of the course.
+
+    2. A 'slides' array: This will be a mix of 'content', 'quiz', and 'recap' slides.
+        - Create a logical flow. Start with content, then maybe a quiz, then more content, and insert a 'recap' slide after a few related topics.
+        - For EACH slide, you must provide:
+            - 'type': 'content', 'quiz', or 'recap'.
+            - 'title': A clear title for the slide.
+            - 'content': For 'content' slides, a summary paragraph (max 150 words). For 'recap' slides, a list of key bullet points separated by a newline character (\\n). For 'quiz' slides, this can be a brief context sentence.
+            - IMAGE CHOICE (Choose ONE):
+                - 'reusedImageIndex': If one of the ${imageCount} provided images is highly relevant, set this to its 0-based index.
+                - 'imagePrompt': If NO provided image is suitable, provide a simple, descriptive prompt for an AI to generate a new, relevant visual. DO NOT set both 'reusedImageIndex' and 'imagePrompt'.
+            - 'audioText': A script for audio narration, explaining the core concept.
+            - 'quiz': For 'quiz' slides, create a multiple-choice question object. For all other slide types, this MUST be null. The quiz answer MUST be available in the content of a PRECEDING slide.
+
+    CRITICAL INSTRUCTIONS:
+    - Base all content STRICTLY on the provided document text.
+    - Ensure a good variety of slide types.
+    - Make the experience fun, engaging, and top-class.
 
     Document Text:
     ---
@@ -46,24 +65,37 @@ export class GeminiService {
         config: {
           responseMimeType: 'application/json',
           responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING },
-                content: { type: Type.STRING },
-                imagePrompt: { type: Type.STRING },
-                audioText: { type: Type.STRING },
-                quiz: {
+            type: Type.OBJECT,
+            properties: {
+              intro: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                  overview: { type: Type.STRING },
+                  learningOutcomes: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  courseStructure: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+              },
+              slides: {
+                type: Type.ARRAY,
+                items: {
                   type: Type.OBJECT,
-                  nullable: true,
                   properties: {
-                    question: { type: Type.STRING },
-                    options: {
-                      type: Type.ARRAY,
-                      items: { type: Type.STRING },
+                    type: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    content: { type: Type.STRING },
+                    imagePrompt: { type: Type.STRING, nullable: true },
+                    reusedImageIndex: { type: Type.INTEGER, nullable: true },
+                    audioText: { type: Type.STRING },
+                    quiz: {
+                      type: Type.OBJECT,
+                      nullable: true,
+                      properties: {
+                        question: { type: Type.STRING },
+                        options: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        correctAnswer: { type: Type.STRING },
+                      },
                     },
-                    correctAnswer: { type: Type.STRING },
                   },
                 },
               },
@@ -73,7 +105,7 @@ export class GeminiService {
       });
 
       const jsonString = response.text;
-      return JSON.parse(jsonString) as Slide[];
+      return JSON.parse(jsonString) as Course;
     } catch (error) {
       console.error('Error generating learning experience:', error);
       throw new Error('Failed to generate learning content from the PDF.');

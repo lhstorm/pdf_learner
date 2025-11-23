@@ -1,7 +1,6 @@
-
 import { Component, ChangeDetectionStrategy, signal } from '@angular/core';
 import { GeminiService } from './services/gemini.service';
-import { Slide } from './types';
+import { Slide, Course } from './types';
 import { FileUploadComponent } from './components/file-upload/file-upload.component';
 import { LearningViewComponent } from './components/learning-view/learning-view.component';
 
@@ -30,7 +29,7 @@ import { LearningViewComponent } from './components/learning-view/learning-view.
 
     @switch (viewState()) {
       @case ('upload') {
-        <app-file-upload (pdfTextExtracted)="onPdfTextExtracted($event)" />
+        <app-file-upload (pdfDataExtracted)="onPdfDataExtracted($event)" />
       }
       @case ('generating') {
         <div class="flex flex-col items-center justify-center text-center p-8 bg-white/50 rounded-2xl shadow-lg backdrop-blur-sm border border-gray-200">
@@ -68,13 +67,10 @@ export class AppComponent {
   generationProgress = signal<number>(0);
   generationMessage = signal<string>('');
 
-  constructor(private geminiService: GeminiService) {
-    // The pdf.js worker setup was moved to FileUploadComponent to prevent
-    // a potential race condition that could cause a blank screen on startup.
-  }
+  constructor(private geminiService: GeminiService) {}
 
-  async onPdfTextExtracted(pdfText: string) {
-    if (!pdfText.trim()) {
+  async onPdfDataExtracted({ text, images }: { text: string; images: string[] }) {
+    if (!text.trim()) {
       this.errorMessage.set('Could not extract any text from the PDF. Please try another file.');
       this.viewState.set('error');
       return;
@@ -82,24 +78,40 @@ export class AppComponent {
 
     this.viewState.set('generating');
     try {
-      this.generationMessage.set('Structuring content into lessons...');
-      const slideSkeletons = await this.geminiService.generateLearningExperience(pdfText);
-      if (!slideSkeletons || slideSkeletons.length === 0) {
-          throw new Error("AI failed to generate any slides from the provided text.");
+      this.generationMessage.set('Structuring content into a course...');
+      const course = await this.geminiService.generateLearningExperience(text, images.length);
+      if (!course || !course.slides || course.slides.length === 0) {
+          throw new Error("AI failed to generate a course structure from the provided text.");
       }
-      this.slides.set(slideSkeletons.map(s => ({ ...s, imageLoading: true })));
-      this.generationProgress.set(10); // 10% for content structure
+      this.generationProgress.set(10);
 
-      this.generationMessage.set('Generating visuals for each slide...');
+      // Transform the course structure into a flat array of slides for the view
+      const flattenedSlides: Slide[] = this.flattenCourse(course);
+      this.slides.set(flattenedSlides.map(s => ({ ...s, imageLoading: true })));
+
+      this.generationMessage.set('Preparing visuals for each slide...');
+      
       const imagePromises = this.slides().map((slide, index) => {
-        return this.geminiService.generateImage(slide.imagePrompt).then(imageUrl => {
+        let imagePromise: Promise<string>;
+
+        if (slide.reusedImageIndex !== undefined && slide.reusedImageIndex < images.length) {
+          // Use an image extracted from the PDF
+          imagePromise = Promise.resolve(images[slide.reusedImageIndex]);
+        } else if (slide.imagePrompt) {
+          // Generate a new image
+          imagePromise = this.geminiService.generateImage(slide.imagePrompt);
+        } else {
+          // Fallback for intro slide or if no image is specified
+          imagePromise = Promise.resolve('https://picsum.photos/1280/720?random=' + Math.random());
+        }
+
+        return imagePromise.then(imageUrl => {
           this.slides.update(currentSlides => {
             const newSlides = [...currentSlides];
             newSlides[index] = { ...newSlides[index], imageUrl, imageLoading: false };
             return newSlides;
           });
-          // Update progress based on images generated
-          const progress = 10 + ( (index + 1) / this.slides().length) * 90;
+          const progress = 10 + ((index + 1) / this.slides().length) * 90;
           this.generationProgress.set(Math.round(progress));
         });
       });
@@ -113,6 +125,23 @@ export class AppComponent {
       this.errorMessage.set(err.message || 'An unknown error occurred during content generation.');
       this.viewState.set('error');
     }
+  }
+
+  private flattenCourse(course: Course): Slide[] {
+    const introSlide: Slide = {
+      type: 'intro',
+      title: course.intro.title,
+      overview: course.intro.overview,
+      learningOutcomes: course.intro.learningOutcomes,
+      courseStructure: course.intro.courseStructure,
+      // Default values for a non-content slide
+      content: '',
+      audioText: `Welcome to the course on ${course.intro.title}. In this course, we will cover ${course.intro.courseStructure.join(', ')}. By the end, you will be able to ${course.intro.learningOutcomes.join(', ')}. Let's get started.`,
+      quiz: null,
+      imagePrompt: course.intro.title, // Generate a title image
+    };
+
+    return [introSlide, ...course.slides];
   }
 
   startOver() {
